@@ -105,11 +105,11 @@ if st.session_state.session is None:
 
             st.rerun()
 
-        except Exception:
-            st.error(
-                "로그인에 실패했습니다. "
-                "이메일, 비밀번호 또는 계정 등록 상태를 확인하세요."
-            )
+        
+        except Exception as e:
+            st.error("로그인 처리 중 오류가 발생했습니다.")
+            st.code(f"{type(e).__name__}: {str(e)}")
+
 
     st.stop()
 
