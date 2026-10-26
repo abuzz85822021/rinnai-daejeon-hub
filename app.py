@@ -558,19 +558,34 @@ def price_catalog_page(client, role):
             st.info('등록된 제품 가격이 없습니다.')
             return
 
-        categories = sorted({str(r.get('category') or '기타') for r in rows})
+        # Imported Excel stores "worksheet / detailed category" in products.category.
+        # Split only for display; no database migration or re-upload is needed.
+        def category_parts(row):
+            raw = str(row.get('category') or '기타').strip()
+            if ' / ' in raw:
+                main, detail = raw.split(' / ', 1)
+                return (main.strip() or '기타', detail.strip() or '기타')
+            return (raw or '기타', '기타')
+
+        main_groups = sorted({category_parts(r)[0] for r in rows})
         st.caption(f'{list_name} · 전체 {len(rows):,}개 모델')
-        # Put the product group first and show only the four requested columns.
-        category = st.selectbox('제품군 선택', ['전체 제품군'] + categories,
-                                key='catalog_category')
-        keyword = st.text_input('모델명 · 비고 검색',
-                                placeholder='모델명이나 비고를 입력하세요', key='catalog_search')
+        main_group = st.selectbox('제품군', ['전체 제품군'] + main_groups,
+                                  key='catalog_main_group')
+        group_rows = [r for r in rows if main_group == '전체 제품군'
+                      or category_parts(r)[0] == main_group]
+        detail_groups = sorted({category_parts(r)[1] for r in group_rows})
+        detail_group = st.selectbox('상세 제품군', ['전체 상세 제품군'] + detail_groups,
+                                    key='catalog_detail_group')
+        keyword = st.text_input('모델명 · 제품명 · 비고 검색',
+                                placeholder='예: RC620, 2구', key='catalog_search')
         keyword = keyword.strip().casefold()
-        filtered = [r for r in rows
-                    if (category == '전체 제품군' or str(r.get('category') or '기타') == category)
+        filtered = [r for r in group_rows
+                    if (detail_group == '전체 상세 제품군'
+                        or category_parts(r)[1] == detail_group)
                     and (not keyword or keyword in str(r.get('model_name') or '').casefold()
                          or keyword in str(r.get('product_name') or '').casefold()
-                         or keyword in str(r.get('remarks') or '').casefold())]
+                         or keyword in str(r.get('remarks') or '').casefold()
+                         or keyword in str(r.get('category') or '').casefold())]
         filtered.sort(key=lambda r: (str(r.get('category') or ''),
                                      str(r.get('model_name') or '')))
         st.caption(f'조회 결과 {len(filtered):,}개 모델 · 단위: 원')
@@ -635,7 +650,8 @@ def price_catalog_page(client, role):
                     '</tbody></table></div>')
 
         export_rows = [{
-            '제품군': r.get('category') or '기타',
+            '제품군': category_parts(r)[0],
+            '상세 제품군': category_parts(r)[1],
             '모델명': r.get('model_name') or '',
             '부가세 별도': r.get('price'),
             '부가세 포함': incl_price(r),
