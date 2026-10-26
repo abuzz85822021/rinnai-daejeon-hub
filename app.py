@@ -567,7 +567,15 @@ def price_catalog_page(client, role):
                 return (main.strip() or '기타', detail.strip() or '기타')
             return (raw or '기타', '기타')
 
-        main_groups = sorted({category_parts(r)[0] for r in rows})
+        # Preserve the original Excel workbook tab order, rather than 가나다 sorting.
+        workbook_sheet_order = [
+            '주방종합', '가전종합', '가스온수기_캐스케이드', '전기온수기',
+            'RC620, R331S', 'RCK623, 각방제어', 'AIOT, UFB보일러',
+            '업소용1', '업소용2', '조달청판매제품', '인상제품'
+        ]
+        existing_groups = {category_parts(r)[0] for r in rows}
+        main_groups = [g for g in workbook_sheet_order if g in existing_groups]
+        main_groups += sorted(existing_groups - set(main_groups))
         st.caption(f'{list_name} · 전체 {len(rows):,}개 모델')
         main_group = st.selectbox('제품군', ['전체 제품군'] + main_groups,
                                   key='catalog_main_group')
@@ -598,67 +606,79 @@ def price_catalog_page(client, role):
                 return r['price_including_vat']
             return round(float(r['price']) * 1.1) if r.get('price') is not None else None
 
-        # Render a compact, high-contrast table with a fixed four-column layout.
-        # Escape all values because remarks and model names originate in Excel.
+        # Expanded notes live in a separate full-width table row. They never
+        # squeeze the 4th column or make model/price cells excessively tall.
         table_rows = []
         for i, r in enumerate(filtered):
             model = html.escape(str(r.get('model_name') or ''))
             raw_remarks = str(r.get('remarks') or '').strip()
             remarks = html.escape(raw_remarks)
-            if raw_remarks:
-                short = html.escape(raw_remarks.replace('\n', ' ').replace('\r', ' '))
-                short = short[:30] + ('…' if len(short) > 30 else '')
-                # Native HTML details keeps the full note readable on mobile without JavaScript.
-                remark_cell = (f'<details class="r-note"><summary>상세보기</summary>'
-                               f'<div class="r-note-full">{remarks}</div></details>') if len(raw_remarks) > 16 or '\n' in raw_remarks else f'<span class="r-note-short">{remarks}</span>'
-            else:
-                remark_cell = '<span class="r-note-empty">-</span>'
             ex = html.escape(money(r.get('price')).replace('원', ''))
             inc = html.escape(money(incl_price(r)).replace('원', ''))
             row_class = 'alt' if i % 2 else ''
+            long_note = len(raw_remarks) > 16 or '\n' in raw_remarks
+            if long_note:
+                remark_cell = '<details class="r-note"><summary>상세보기</summary></details>'
+            elif raw_remarks:
+                remark_cell = f'<span class="r-note-short">{remarks}</span>'
+            else:
+                remark_cell = '<span class="r-note-empty">-</span>'
             table_rows.append(
-                f'<tr class="{row_class}"><td class="model">{model}</td>'
+                f'<tr class="r-main-row {row_class}"><td class="model">{model}</td>'
                 f'<td class="price">{ex}</td><td class="price incl">{inc}</td>'
                 f'<td class="remarks">{remark_cell}</td></tr>')
+            if long_note:
+                table_rows.append(
+                    '<tr class="r-expanded-row"><td colspan="4">'
+                    '<div class="r-note-full"><div class="r-note-title">'
+                    f'{model} · 비고 상세내용</div><div class="r-note-text">'
+                    f'{remarks}</div></div></td></tr>')
 
         css = '''
         <style>
-        .r-price-wrap {width:100%; overflow-x:auto; border:1px solid #e5eaf1;
-                       border-radius:14px; background:#fff; box-shadow:0 3px 14px rgba(24,39,64,.045);}
-        .r-price-table {width:100%; border-collapse:separate; border-spacing:0;
-                        table-layout:fixed; font-family:inherit; color:#243244;}
+        .r-price-wrap {width:100%;overflow-x:auto;border:1px solid #e5eaf1;
+                       border-radius:14px;background:#fff;box-shadow:0 3px 14px rgba(24,39,64,.045);}
+        .r-price-table {width:100%;border-collapse:separate;border-spacing:0;
+                        table-layout:fixed;font-family:inherit;color:#243244;}
         .r-price-table th {position:sticky;top:0;z-index:1;background:#263c59;
-                           color:white; padding:13px 9px; font-size:15px;
-                           font-weight:650; text-align:left; white-space:nowrap;}
+                           color:white;padding:13px 9px;font-size:15px;
+                           font-weight:650;text-align:left;white-space:nowrap;}
         .r-price-table th:nth-child(1) {width:30%;}
         .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:24%;text-align:right;}
         .r-price-table th:nth-child(4) {width:22%;}
-        .r-price-table td {padding:11px 9px; border-bottom:1px solid #edf0f4;
+        .r-price-table td {padding:11px 9px;border-bottom:1px solid #edf0f4;
                            font-size:16px;vertical-align:middle;overflow-wrap:anywhere;}
-        .r-price-table tr.alt td {background:#f7f9fc;}
-        .r-price-table td.model {font-weight:700; color:#233f64;}
+        .r-price-table tr.r-main-row.alt td {background:#f7f9fc;}
+        .r-price-table td.model {font-weight:700;color:#233f64;}
         .r-price-table td.price {text-align:right;white-space:nowrap;
                                  font-variant-numeric:tabular-nums;font-weight:550;}
         .r-price-table td.incl {color:#12685c;font-weight:750;}
-        .r-price-table td.remarks {color:#657286;font-size:14px; overflow-wrap:break-word;}
-        .r-note summary {cursor:pointer; color:#1b5e89; font-weight:700; white-space:nowrap; list-style:none;}
+        .r-price-table td.remarks {color:#657286;font-size:14px;}
+        .r-note summary {cursor:pointer;color:#1b5e89;font-weight:700;
+                         white-space:nowrap;list-style:none;}
         .r-note summary::-webkit-details-marker {display:none;}
-        .r-note summary::before {content:'＋ '; font-weight:800;}
+        .r-note summary::before {content:'＋ ';font-weight:800;}
         .r-note[open] summary::before {content:'－ ';}
-        .r-note-full {margin-top:8px; padding:10px; border-radius:8px; background:#edf4fa;
-                      color:#243244; line-height:1.55; white-space:pre-wrap;
-                      overflow-wrap:anywhere; min-width:0; font-size:14px;}
+        .r-expanded-row {display:none;}
+        .r-main-row:has(.r-note[open]) + .r-expanded-row {display:table-row;}
+        .r-expanded-row td {padding:0 10px 14px!important;background:#fff!important;}
+        .r-note-full {padding:16px;border:1px solid #dce8f1;border-radius:12px;
+                      background:#f3f7fb;color:#243244;}
+        .r-note-title {font-size:15px;font-weight:750;color:#263c59;margin-bottom:9px;}
+        .r-note-text {font-size:16px;line-height:1.7;white-space:pre-wrap;
+                      overflow-wrap:anywhere;word-break:break-word;}
         .r-note-empty {color:#a2adbb;}
-        .r-price-table tbody tr:last-child td {border-bottom:0;}
         @media(max-width:600px) {
           .r-price-table th {font-size:13px;padding:12px 4px;}
           .r-price-table td {font-size:14px;padding:13px 4px;}
           .r-price-table td.remarks {font-size:13px;}
-          .r-note-full {font-size:14px; padding:8px;}
-          .r-price-table td.price {font-size:13px; letter-spacing:-.35px;}
+          .r-price-table td.price {font-size:13px;letter-spacing:-.35px;}
           .r-price-table th:nth-child(1) {width:29%;}
           .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:25%;}
           .r-price-table th:nth-child(4) {width:21%;}
+          .r-expanded-row td {padding:0 7px 12px!important;}
+          .r-note-full {padding:14px;}
+          .r-note-text {font-size:16px;line-height:1.75;}
         }
         </style>
         '''
