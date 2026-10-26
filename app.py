@@ -314,7 +314,7 @@ def get_price_lists(client):
 
 
 def get_products(client):
-    return client.table("products").select("product_id,model_name,product_name,category").order("model_name").execute().data or []
+    return client.table("products").select("product_id,model_name,product_name,category,remarks").order("model_name").execute().data or []
 
 
 def get_price_items(client, list_id):
@@ -603,14 +603,23 @@ def price_catalog_page(client, role):
         table_rows = []
         for i, r in enumerate(filtered):
             model = html.escape(str(r.get('model_name') or ''))
-            remarks = html.escape(str(r.get('remarks') or ''))
+            raw_remarks = str(r.get('remarks') or '').strip()
+            remarks = html.escape(raw_remarks)
+            if raw_remarks:
+                short = html.escape(raw_remarks.replace('\n', ' ').replace('\r', ' '))
+                short = short[:30] + ('…' if len(short) > 30 else '')
+                # Native HTML details keeps the full note readable on mobile without JavaScript.
+                remark_cell = (f'<details class="r-note"><summary>상세보기</summary>'
+                               f'<div class="r-note-full">{remarks}</div></details>') if len(raw_remarks) > 16 or '\n' in raw_remarks else f'<span class="r-note-short">{remarks}</span>'
+            else:
+                remark_cell = '<span class="r-note-empty">-</span>'
             ex = html.escape(money(r.get('price')).replace('원', ''))
             inc = html.escape(money(incl_price(r)).replace('원', ''))
             row_class = 'alt' if i % 2 else ''
             table_rows.append(
                 f'<tr class="{row_class}"><td class="model">{model}</td>'
                 f'<td class="price">{ex}</td><td class="price incl">{inc}</td>'
-                f'<td class="remarks">{remarks}</td></tr>')
+                f'<td class="remarks">{remark_cell}</td></tr>')
 
         css = '''
         <style>
@@ -631,12 +640,21 @@ def price_catalog_page(client, role):
         .r-price-table td.price {text-align:right;white-space:nowrap;
                                  font-variant-numeric:tabular-nums;font-weight:550;}
         .r-price-table td.incl {color:#12685c;font-weight:750;}
-        .r-price-table td.remarks {color:#657286;font-size:14px;}
+        .r-price-table td.remarks {color:#657286;font-size:14px; overflow-wrap:break-word;}
+        .r-note summary {cursor:pointer; color:#1b5e89; font-weight:700; white-space:nowrap; list-style:none;}
+        .r-note summary::-webkit-details-marker {display:none;}
+        .r-note summary::before {content:'＋ '; font-weight:800;}
+        .r-note[open] summary::before {content:'－ ';}
+        .r-note-full {margin-top:8px; padding:10px; border-radius:8px; background:#edf4fa;
+                      color:#243244; line-height:1.55; white-space:pre-wrap;
+                      overflow-wrap:anywhere; min-width:0; font-size:14px;}
+        .r-note-empty {color:#a2adbb;}
         .r-price-table tbody tr:last-child td {border-bottom:0;}
         @media(max-width:600px) {
           .r-price-table th {font-size:13px;padding:12px 4px;}
           .r-price-table td {font-size:14px;padding:13px 4px;}
           .r-price-table td.remarks {font-size:13px;}
+          .r-note-full {font-size:14px; padding:8px;}
           .r-price-table td.price {font-size:13px; letter-spacing:-.35px;}
           .r-price-table th:nth-child(1) {width:29%;}
           .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:25%;}
