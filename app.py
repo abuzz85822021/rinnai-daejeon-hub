@@ -463,8 +463,29 @@ def staff_prices_page(client, role):
                 if skipped:
                     with st.expander('검토가 필요한 항목'):
                         st.write(skipped[:150])
-                st.dataframe([{'제품군':r['category'],'모델명':r['model_name'],'세별도':money(r['price']),'세포함':money(r['price_including_vat']),'비고':r['remarks'][:100]} for r in records[:100]],hide_index=True,use_container_width=True)
-                st.caption('미리보기는 최대 100개 표시합니다. 승인 시 파일에 포함된 모델만 등록·갱신하며 누락 모델은 삭제하지 않습니다.')
+                st.markdown('#### 업로드 미리보기 확인')
+                groups = list(dict.fromkeys(r['category'].split(' / ')[0] for r in records))
+                group_choice = st.selectbox('미리보기 제품군', ['전체'] + groups, key='excel_preview_group')
+                matching = [r for r in records if group_choice == '전체' or r['category'].split(' / ')[0] == group_choice]
+                search_preview = st.text_input('미리보기 모델명 검색', placeholder='예: RC620, RCK623', key='excel_preview_search').strip().lower()
+                if search_preview:
+                    matching = [r for r in matching if search_preview in r['model_name'].lower() or search_preview in r['category'].lower()]
+                tiered = [r for r in matching if r.get('tiers')]
+                preview_tier = None
+                if tiered:
+                    preview_tier = st.selectbox('R1~R7 가격 확인', ['R1','R2','R3','R4','R5','R6','R7'], key='excel_preview_tier')
+                    st.caption(f'선택한 제품군에서 R1~R7 가격이 인식된 모델: {len(tiered)}개')
+                preview_rows = []
+                for r in matching[:100]:
+                    tp = r.get('tiers',{}).get(preview_tier) if preview_tier else None
+                    preview_rows.append({'제품군':r['category'], '모델명':r['model_name'],
+                        '선택 등급':preview_tier if tp else ('등급 없음' if preview_tier else '기본'),
+                        'VAT 별도':money(tp['price_excluding_vat'] if tp else r['price']),
+                        'VAT 포함':money(tp['price_including_vat'] if tp else r['price_including_vat']),
+                        '비고':r['remarks'][:100]})
+                st.write(f'현재 조건에 해당하는 모델: **{len(matching):,}개**')
+                st.dataframe(preview_rows, hide_index=True, use_container_width=True)
+                st.caption('선택한 제품군/검색 결과 중 최대 100개를 표시합니다. R등급이 없는 제품은 기존 기본 가격이 표시됩니다. 미리보기 선택은 실제 업로드 대상에 영향을 주지 않습니다.')
                 mode = st.radio('업로드 방식', ['신제품만 추가', '포함된 모델 추가·수정'],horizontal=True,key='excel_import_mode')
                 existing_names={p['model_name'] for p in products}
                 selected_records=[r for r in records if mode!='신제품만 추가' or r['model_name'] not in existing_names]
