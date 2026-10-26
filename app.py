@@ -481,9 +481,10 @@ def staff_prices_page(client, role):
             old=current.get(pid,{})
             ex=st.number_input('부가세 별도 가격',min_value=0,value=int(old.get('price') or 0),step=1000)
             inc=st.number_input('부가세 포함 가격',min_value=0,value=int(old.get('price_including_vat') or round(ex*1.1)),step=1000)
+            note_text = st.text_area('비고 수정', value=p.get('remarks') or '', height=150, max_chars=4000, key=f'edit_remark_{pid}', help='변경 요청 승인 후 제품 비고에 반영됩니다. 비고는 모든 단가표에서 공통으로 표시됩니다.')
             reason_single=st.text_input('수정 사유',key='single_reason')
-            if st.button('가격 변경 승인 요청'):
-                try: submit_price_request(client,list_id,'update',[{'product_id':pid,'price':int(ex),'price_including_vat':int(inc)}],reason_single)
+            if st.button('가격·비고 변경 승인 요청'):
+                try: submit_price_request(client,list_id,'update',[{'product_id':pid,'price':int(ex),'price_including_vat':int(inc),'remarks':note_text}],reason_single)
                 except Exception as e: st.error(str(e))
     st.subheader('승인 요청 내역')
     try:
@@ -505,7 +506,7 @@ def approvals_page(client):
                 with st.expander(f"요청 #{r['request_id']} · 단가표 {r['price_list_id']} · {r['action_type']}"):
                     items=r.get('change_data',{}).get('items',[])
                     st.write(f"요청자: {r['requested_by']} / 사유: {r.get('reason') or '-'} / 총 {len(items)}개 모델")
-                    st.dataframe([{'모델명':x.get('model_name') or by_id.get(x.get('product_id'),{}).get('model_name',''),'세별도':money(x.get('price')),'세포함':money(x.get('price_including_vat') if x.get('price_including_vat') is not None else round(float(x.get('price',0))*1.1))} for x in items[:100]],hide_index=True,use_container_width=True)
+                    st.dataframe([{'모델명':x.get('model_name') or by_id.get(x.get('product_id'),{}).get('model_name',''),'세별도':money(x.get('price')),'세포함':money(x.get('price_including_vat') if x.get('price_including_vat') is not None else round(float(x.get('price',0))*1.1)), '비고 변경':(x.get('remarks') if 'remarks' in x else '(변경 없음)')} for x in items[:100]],hide_index=True,use_container_width=True)
                     if len(items)>100: st.caption('첫 100개만 미리보기로 표시합니다.')
                     comment=st.text_input('검토 의견',key=f"comment_{r['request_id']}")
                     confirm=st.checkbox('변경 내용을 검토했습니다',key=f"confirm_{r['request_id']}")
