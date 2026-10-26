@@ -453,17 +453,6 @@ def staff_prices_page(client, role):
         return
     current = {int(r['product_id']):r for r in current_rows}
     by_id = {int(p['product_id']):p for p in products}
-    st.subheader('현재 승인된 가격')
-    view = []
-    for pid, r in current.items():
-        p = by_id.get(pid,{})
-        view.append({'제품군':p.get('category',''), '모델명':p.get('model_name',str(pid)),
-                     '부가세 별도':money(r['price']),
-                     '부가세 포함':money(r.get('price_including_vat') if r.get('price_including_vat') is not None else round(float(r['price'])*1.1))})
-    if view:
-        st.dataframe(view,hide_index=True,use_container_width=True)
-    else: st.info('아직 승인된 가격이 없습니다.')
-
     with st.expander('📤 린나이 원본 엑셀 전체 업로드',expanded=not bool(products)):
         st.info('제품 등록 없이 원본 엑셀을 업로드할 수 있습니다. 업로드는 변경 요청으로 저장되고 관리자 승인 후 제품과 가격이 함께 등록됩니다.')
         tier = st.selectbox('가스보일러(RC620, R331S) 가격 기준', ['R1','R2','R3','R4'], help='원본 엑셀은 R1~R4 가격이 서로 다릅니다. 적용할 등급을 선택하세요.')
@@ -502,7 +491,12 @@ def staff_prices_page(client, role):
         if requests: st.dataframe([{'요청번호':r['request_id'],'단가표 ID':r['price_list_id'],'상태':r['status'],'사유':r.get('reason'),'요청일':format_created_at(r['requested_at'])} for r in requests],hide_index=True,use_container_width=True)
         else: st.info('요청 내역이 없습니다.')
     except Exception as e: st.error(str(e))
-    if role=='admin':
+
+
+def approvals_page(client):
+    products = get_products(client)
+    by_id = {int(p["product_id"]): p for p in products}
+    if True:
         st.subheader('🛡️ 관리자 승인 대기')
         try:
             pending=client.table('price_change_requests').select('request_id,price_list_id,action_type,change_data,reason,requested_by,requested_at').eq('status','pending').order('requested_at').execute().data or []
@@ -531,20 +525,102 @@ def staff_prices_page(client, role):
         except Exception as e: st.error(str(e))
 
 
-def dealer_prices_page(client):
-    st.header('📋 내 단가표')
+def price_catalog_page(client, role):
+    st.header('📋 린나이 제품 단가표')
+    st.caption('제품군별 색상 구분 · 통합 검색 · 부가세 별도/포함 가격')
     try:
-        items=client.rpc('get_my_dealer_prices').execute().data or []
-        if not items:
-            st.info('배정된 단가표 또는 승인된 가격이 없습니다.')
+        if role == 'dealer':
+            rows = client.rpc('get_my_dealer_prices').execute().data or []
+            list_name = '내 대리점 단가표'
+        else:
+            lists = get_price_lists(client)
+            if not lists:
+                st.info('등록된 단가표가 없습니다.')
+                return
+            selected = st.selectbox('단가표 선택', lists,
+                format_func=lambda x: x['price_list_name'], key='catalog_list')
+            list_name = selected['price_list_name']
+            items = client.table('price_list_items').select(
+                'product_id,price,price_including_vat').eq(
+                'price_list_id', selected['price_list_id']).execute().data or []
+            products = get_products(client)
+            product_map = {int(p['product_id']):p for p in products}
+            rows = []
+            for item in items:
+                product = product_map.get(int(item['product_id']))
+                if product:
+                    rows.append({**product, **item})
+        st.caption(f'{list_name} · 등록 모델 {len(rows):,}개')
+        if not rows:
+            st.info('등록된 제품 가격이 없습니다.')
             return
-        categories=sorted(set(r.get('category') or '기타' for r in items))
-        category=st.selectbox('제품군', ['전체']+categories)
-        keyword=st.text_input('모델명 검색')
-        filtered=[r for r in items if (category=='전체' or (r.get('category') or '기타')==category) and keyword.lower() in (r.get('model_name') or '').lower()]
-        st.dataframe([{'제품군':r.get('category') or '', '모델명':r['model_name'],'제품명':r['product_name'],'부가세 별도':money(r['price']),'부가세 포함':money(r.get('price_including_vat') if r.get('price_including_vat') is not None else round(float(r['price'])*1.1)),'비고':r.get('remarks') or ''} for r in filtered],hide_index=True,use_container_width=True)
+        categories = sorted({r.get('category') or '기타' for r in rows})
+        left, right = st.columns([2, 3])
+        with left:
+            category = st.selectbox('제품군', ['전체'] + categories, key='catalog_category')
+        with right:
+            keyword = st.text_input('🔎 통합 검색 (모델명 · 제품명 · 제품군 · 비고)', placeholder='예: RC620, 콘덴싱, 단종', key='catalog_search')
+        keyword = keyword.strip().casefold()
+        filtered = [r for r in rows
+            if (category == '전체' or (r.get('category') or '기타') == category)
+            and (not keyword or keyword in str(r.get('model_name') or '').casefold()
+                 or keyword in str(r.get('product_name') or '').casefold()
+                 or keyword in str(r.get('category') or '').casefold()
+                 or keyword in str(r.get('remarks') or '').casefold())]
+        filtered.sort(key=lambda r: (str(r.get('category') or ''), str(r.get('model_name') or '')))
+        st.write(f'**조회 결과 {len(filtered):,}개 모델**')
+        display = [{
+            '제품군': r.get('category') or '기타',
+            '모델명': r.get('model_name') or '',
+            '제품명': r.get('product_name') or '',
+            '부가세 별도': money(r.get('price')),
+            '부가세 포함': money(r.get('price_including_vat') if r.get('price_including_vat') is not None
+                              else round(float(r['price']) * 1.1)),
+            '비고': r.get('remarks') or '',
+        } for r in filtered]
+        import pandas as pd
+        if display:
+            df = pd.DataFrame(display)
+            # Soft category banding and distinct VAT price columns.
+            category_order = {name: i for i, name in enumerate(dict.fromkeys(df['제품군']))}
+            def style_row(row):
+                band = '#F2F7FD' if category_order[row['제품군']] % 2 == 0 else '#FFFFFF'
+                styles = []
+                for col in row.index:
+                    css = f'background-color: {band}; color: #263445;'
+                    if col == '모델명':
+                        css += ' font-weight: 700;'
+                    elif col == '부가세 별도':
+                        css = 'background-color: #EAF3FF; color: #174E8B; font-weight: 600;'
+                    elif col == '부가세 포함':
+                        css = 'background-color: #EAF8F1; color: #176448; font-weight: 700;'
+                    styles.append(css)
+                return styles
+            styled = df.style.apply(style_row, axis=1)
+            st.dataframe(styled, hide_index=True, use_container_width=True,
+                         height=min(850, max(250, 38 * (len(display) + 1))),
+                         column_config={
+                             '제품군': st.column_config.TextColumn('제품군', width='medium'),
+                             '모델명': st.column_config.TextColumn('모델명', width='medium'),
+                             '제품명': st.column_config.TextColumn('제품명', width='medium'),
+                             '부가세 별도': st.column_config.TextColumn('VAT 별도', width='small'),
+                             '부가세 포함': st.column_config.TextColumn('VAT 포함', width='small'),
+                             '비고': st.column_config.TextColumn('비고', width='large'),
+                         })
+        else:
+            st.info('검색 조건에 맞는 제품이 없습니다. 검색어 또는 제품군을 변경해 보세요.')
+        if display:
+            import io
+            import pandas as pd
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                pd.DataFrame(display).to_excel(writer, index=False, sheet_name='단가표')
+            st.download_button('📥 현재 조회 단가표 엑셀 다운로드',
+                data=output.getvalue(), file_name='rinnai_price_list.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
-        st.error(f'단가표 조회 실패: {e}. VAT 설정 SQL을 확인하세요.')
+        st.error(f'단가표를 불러오지 못했습니다: {e}')
+
 
 client = get_supabase()
 if not refresh_login(client):
@@ -560,7 +636,13 @@ with col2:
     if st.button("로그아웃"):
         logout()
 
-menu = st.radio("메뉴", ["홈", "공지사항", "달력", "단가표"], horizontal=True, label_visibility="collapsed")
+role = st.session_state.role
+menus = ["홈", "공지사항", "달력", "단가표"]
+if role in ("admin", "staff"):
+    menus.append("단가표 관리")
+if role == "admin":
+    menus.append("승인 관리")
+menu = st.radio("메뉴", menus, horizontal=True, label_visibility="collapsed")
 st.divider()
 role = st.session_state.role
 can_manage = role in ("admin", "staff")
@@ -574,9 +656,10 @@ elif menu == "공지사항":
 elif menu == "달력":
     calendar_page(client, can_manage)
 elif menu == "단가표":
-    if role in ("admin", "staff"):
-        staff_prices_page(client, role)
-    else:
-        dealer_prices_page(client)
+    price_catalog_page(client, role)
+elif menu == "단가표 관리" and role in ("admin", "staff"):
+    staff_prices_page(client, role)
+elif menu == "승인 관리" and role == "admin":
+    approvals_page(client)
 st.divider()
 st.caption("© RINNAI DAEJEON BRANCH")
