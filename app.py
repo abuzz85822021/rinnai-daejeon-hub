@@ -655,8 +655,14 @@ def price_catalog_page(client, role):
         main_groups = [g for g in workbook_sheet_order if g in existing_groups]
         main_groups += sorted(existing_groups - set(main_groups))
         st.caption(f'{list_name} · 전체 {len(rows):,}개 모델')
+        # Changing the main product group must clear the previously selected detail
+        # group before Streamlit re-renders the dependent selectbox.
+        def reset_catalog_detail_group():
+            st.session_state['catalog_detail_group'] = '전체 상세 제품군'
+
         main_group = st.selectbox('제품군', ['전체 제품군'] + main_groups,
-                                  key='catalog_main_group')
+                                  key='catalog_main_group',
+                                  on_change=reset_catalog_detail_group)
         group_rows = [r for r in rows if main_group == '전체 제품군'
                       or category_parts(r)[0] == main_group]
         detail_groups = sorted({category_parts(r)[1] for r in group_rows})
