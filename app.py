@@ -604,34 +604,35 @@ def price_catalog_page(client, role):
         .r-price-table {width:100%; border-collapse:separate; border-spacing:0;
                         table-layout:fixed; font-family:inherit; color:#243244;}
         .r-price-table th {position:sticky;top:0;z-index:1;background:#263c59;
-                           color:white; padding:13px 9px; font-size:13px;
+                           color:white; padding:13px 9px; font-size:15px;
                            font-weight:650; text-align:left; white-space:nowrap;}
         .r-price-table th:nth-child(1) {width:30%;}
         .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:24%;text-align:right;}
         .r-price-table th:nth-child(4) {width:22%;}
         .r-price-table td {padding:11px 9px; border-bottom:1px solid #edf0f4;
-                           font-size:13px;vertical-align:middle;overflow-wrap:anywhere;}
+                           font-size:16px;vertical-align:middle;overflow-wrap:anywhere;}
         .r-price-table tr.alt td {background:#f7f9fc;}
         .r-price-table td.model {font-weight:700; color:#233f64;}
         .r-price-table td.price {text-align:right;white-space:nowrap;
                                  font-variant-numeric:tabular-nums;font-weight:550;}
         .r-price-table td.incl {color:#12685c;font-weight:750;}
-        .r-price-table td.remarks {color:#657286;font-size:12px;}
+        .r-price-table td.remarks {color:#657286;font-size:14px;}
         .r-price-table tbody tr:last-child td {border-bottom:0;}
         @media(max-width:600px) {
-          .r-price-table th {font-size:11px;padding:11px 4px;}
-          .r-price-table td {font-size:11px;padding:10px 4px;}
-          .r-price-table td.remarks {font-size:10px;}
+          .r-price-table th {font-size:13px;padding:12px 4px;}
+          .r-price-table td {font-size:14px;padding:13px 4px;}
+          .r-price-table td.remarks {font-size:13px;}
+          .r-price-table td.price {font-size:13px; letter-spacing:-.35px;}
           .r-price-table th:nth-child(1) {width:29%;}
           .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:25%;}
           .r-price-table th:nth-child(4) {width:21%;}
         }
         </style>
         '''
-        st.markdown(css + '<div class="r-price-wrap"><table class="r-price-table">'
+        st.html(css + '<div class="r-price-wrap"><table class="r-price-table">'
                     '<thead><tr><th>모델명</th><th>VAT 별도</th><th>VAT 포함</th>'
                     '<th>비고</th></tr></thead><tbody>' + ''.join(table_rows) +
-                    '</tbody></table></div>', unsafe_allow_html=True)
+                    '</tbody></table></div>')
 
         export_rows = [{
             '제품군': r.get('category') or '기타',
