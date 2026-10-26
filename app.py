@@ -526,8 +526,11 @@ def approvals_page(client):
 
 
 def price_catalog_page(client, role):
+    import html
+    import io
+    import pandas as pd
+
     st.header('📋 린나이 제품 단가표')
-    st.caption('제품군별 색상 구분 · 통합 검색 · 부가세 별도/포함 가격')
     try:
         if role == 'dealer':
             rows = client.rpc('get_my_dealer_prices').execute().data or []
@@ -544,80 +547,105 @@ def price_catalog_page(client, role):
                 'product_id,price,price_including_vat').eq(
                 'price_list_id', selected['price_list_id']).execute().data or []
             products = get_products(client)
-            product_map = {int(p['product_id']):p for p in products}
+            product_map = {int(p['product_id']): p for p in products}
             rows = []
             for item in items:
                 product = product_map.get(int(item['product_id']))
                 if product:
                     rows.append({**product, **item})
-        st.caption(f'{list_name} · 등록 모델 {len(rows):,}개')
+
         if not rows:
             st.info('등록된 제품 가격이 없습니다.')
             return
-        categories = sorted({r.get('category') or '기타' for r in rows})
-        left, right = st.columns([2, 3])
-        with left:
-            category = st.selectbox('제품군', ['전체'] + categories, key='catalog_category')
-        with right:
-            keyword = st.text_input('🔎 통합 검색 (모델명 · 제품명 · 제품군 · 비고)', placeholder='예: RC620, 콘덴싱, 단종', key='catalog_search')
+
+        categories = sorted({str(r.get('category') or '기타') for r in rows})
+        st.caption(f'{list_name} · 전체 {len(rows):,}개 모델')
+        # Put the product group first and show only the four requested columns.
+        category = st.selectbox('제품군 선택', ['전체 제품군'] + categories,
+                                key='catalog_category')
+        keyword = st.text_input('모델명 · 비고 검색',
+                                placeholder='모델명이나 비고를 입력하세요', key='catalog_search')
         keyword = keyword.strip().casefold()
         filtered = [r for r in rows
-            if (category == '전체' or (r.get('category') or '기타') == category)
-            and (not keyword or keyword in str(r.get('model_name') or '').casefold()
-                 or keyword in str(r.get('product_name') or '').casefold()
-                 or keyword in str(r.get('category') or '').casefold()
-                 or keyword in str(r.get('remarks') or '').casefold())]
-        filtered.sort(key=lambda r: (str(r.get('category') or ''), str(r.get('model_name') or '')))
-        st.write(f'**조회 결과 {len(filtered):,}개 모델**')
-        display = [{
+                    if (category == '전체 제품군' or str(r.get('category') or '기타') == category)
+                    and (not keyword or keyword in str(r.get('model_name') or '').casefold()
+                         or keyword in str(r.get('product_name') or '').casefold()
+                         or keyword in str(r.get('remarks') or '').casefold())]
+        filtered.sort(key=lambda r: (str(r.get('category') or ''),
+                                     str(r.get('model_name') or '')))
+        st.caption(f'조회 결과 {len(filtered):,}개 모델 · 단위: 원')
+        if not filtered:
+            st.info('검색 결과가 없습니다. 제품군 또는 검색어를 변경해 주세요.')
+            return
+
+        def incl_price(r):
+            if r.get('price_including_vat') is not None:
+                return r['price_including_vat']
+            return round(float(r['price']) * 1.1) if r.get('price') is not None else None
+
+        # Render a compact, high-contrast table with a fixed four-column layout.
+        # Escape all values because remarks and model names originate in Excel.
+        table_rows = []
+        for i, r in enumerate(filtered):
+            model = html.escape(str(r.get('model_name') or ''))
+            remarks = html.escape(str(r.get('remarks') or ''))
+            ex = html.escape(money(r.get('price')).replace('원', ''))
+            inc = html.escape(money(incl_price(r)).replace('원', ''))
+            row_class = 'alt' if i % 2 else ''
+            table_rows.append(
+                f'<tr class="{row_class}"><td class="model">{model}</td>'
+                f'<td class="price">{ex}</td><td class="price incl">{inc}</td>'
+                f'<td class="remarks">{remarks}</td></tr>')
+
+        css = '''
+        <style>
+        .r-price-wrap {width:100%; overflow-x:auto; border:1px solid #e5eaf1;
+                       border-radius:14px; background:#fff; box-shadow:0 3px 14px rgba(24,39,64,.045);}
+        .r-price-table {width:100%; border-collapse:separate; border-spacing:0;
+                        table-layout:fixed; font-family:inherit; color:#243244;}
+        .r-price-table th {position:sticky;top:0;z-index:1;background:#263c59;
+                           color:white; padding:13px 9px; font-size:13px;
+                           font-weight:650; text-align:left; white-space:nowrap;}
+        .r-price-table th:nth-child(1) {width:30%;}
+        .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:24%;text-align:right;}
+        .r-price-table th:nth-child(4) {width:22%;}
+        .r-price-table td {padding:11px 9px; border-bottom:1px solid #edf0f4;
+                           font-size:13px;vertical-align:middle;overflow-wrap:anywhere;}
+        .r-price-table tr.alt td {background:#f7f9fc;}
+        .r-price-table td.model {font-weight:700; color:#233f64;}
+        .r-price-table td.price {text-align:right;white-space:nowrap;
+                                 font-variant-numeric:tabular-nums;font-weight:550;}
+        .r-price-table td.incl {color:#12685c;font-weight:750;}
+        .r-price-table td.remarks {color:#657286;font-size:12px;}
+        .r-price-table tbody tr:last-child td {border-bottom:0;}
+        @media(max-width:600px) {
+          .r-price-table th {font-size:11px;padding:11px 4px;}
+          .r-price-table td {font-size:11px;padding:10px 4px;}
+          .r-price-table td.remarks {font-size:10px;}
+          .r-price-table th:nth-child(1) {width:29%;}
+          .r-price-table th:nth-child(2),.r-price-table th:nth-child(3) {width:25%;}
+          .r-price-table th:nth-child(4) {width:21%;}
+        }
+        </style>
+        '''
+        st.markdown(css + '<div class="r-price-wrap"><table class="r-price-table">'
+                    '<thead><tr><th>모델명</th><th>VAT 별도</th><th>VAT 포함</th>'
+                    '<th>비고</th></tr></thead><tbody>' + ''.join(table_rows) +
+                    '</tbody></table></div>', unsafe_allow_html=True)
+
+        export_rows = [{
             '제품군': r.get('category') or '기타',
             '모델명': r.get('model_name') or '',
-            '제품명': r.get('product_name') or '',
-            '부가세 별도': money(r.get('price')),
-            '부가세 포함': money(r.get('price_including_vat') if r.get('price_including_vat') is not None
-                              else round(float(r['price']) * 1.1)),
+            '부가세 별도': r.get('price'),
+            '부가세 포함': incl_price(r),
             '비고': r.get('remarks') or '',
         } for r in filtered]
-        import pandas as pd
-        if display:
-            df = pd.DataFrame(display)
-            # Soft category banding and distinct VAT price columns.
-            category_order = {name: i for i, name in enumerate(dict.fromkeys(df['제품군']))}
-            def style_row(row):
-                band = '#F2F7FD' if category_order[row['제품군']] % 2 == 0 else '#FFFFFF'
-                styles = []
-                for col in row.index:
-                    css = f'background-color: {band}; color: #263445;'
-                    if col == '모델명':
-                        css += ' font-weight: 700;'
-                    elif col == '부가세 별도':
-                        css = 'background-color: #EAF3FF; color: #174E8B; font-weight: 600;'
-                    elif col == '부가세 포함':
-                        css = 'background-color: #EAF8F1; color: #176448; font-weight: 700;'
-                    styles.append(css)
-                return styles
-            styled = df.style.apply(style_row, axis=1)
-            st.dataframe(styled, hide_index=True, use_container_width=True,
-                         height=min(850, max(250, 38 * (len(display) + 1))),
-                         column_config={
-                             '제품군': st.column_config.TextColumn('제품군', width='medium'),
-                             '모델명': st.column_config.TextColumn('모델명', width='medium'),
-                             '제품명': st.column_config.TextColumn('제품명', width='medium'),
-                             '부가세 별도': st.column_config.TextColumn('VAT 별도', width='small'),
-                             '부가세 포함': st.column_config.TextColumn('VAT 포함', width='small'),
-                             '비고': st.column_config.TextColumn('비고', width='large'),
-                         })
-        else:
-            st.info('검색 조건에 맞는 제품이 없습니다. 검색어 또는 제품군을 변경해 보세요.')
-        if display:
-            import io
-            import pandas as pd
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                pd.DataFrame(display).to_excel(writer, index=False, sheet_name='단가표')
-            st.download_button('📥 현재 조회 단가표 엑셀 다운로드',
-                data=output.getvalue(), file_name='rinnai_price_list.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            pd.DataFrame(export_rows).to_excel(writer, index=False, sheet_name='단가표')
+        st.download_button('📥 현재 조회 단가표 엑셀 다운로드',
+                           data=output.getvalue(), file_name='rinnai_price_list.xlsx',
+                           mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
         st.error(f'단가표를 불러오지 못했습니다: {e}')
 
