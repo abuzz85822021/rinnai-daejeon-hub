@@ -336,79 +336,76 @@ def submit_price_request(client, list_id, action, items, reason):
     st.rerun()
 
 
-def parse_original_excel(uploaded, boiler_tier):
-    """Read Rinnai multi-sheet price list without changing the original workbook."""
+def parse_original_excel(uploaded, boiler_tier='R1'):
+    """Parse full/partial workbook, retaining all R1-R7 tiers."""
     import pandas as pd
-    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
+    import re
+    from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
     sheets = pd.read_excel(uploaded, sheet_name=None, header=None, dtype=object)
-    records = {}
-    skipped = []
-    def integer_price(v):
-        if v is None or pd.isna(v) or str(v).strip() in ('', '-', 'nan'):
-            return None
+    records, skipped = {}, []
+    def amount(value):
+        if value is None or pd.isna(value) or str(value).strip() in ('', '-', 'nan'): return None
         try:
-            d = Decimal(str(v).replace(',', '').replace('원', '').strip())
-            if not d.is_finite() or d < 0:
-                return None
-            return int(d.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
-        except (InvalidOperation, ValueError):
-            return None
-
-    for sheet_name, df in sheets.items():
-        if sheet_name.strip() in ('목차',):
-            continue
-        header_row = None
-        for i in range(min(len(df), 40)):
-            cells = [str(x).replace(' ', '').replace('\n', '') if pd.notna(x) else '' for x in df.iloc[i].tolist()]
-            if any('모델명' in c for c in cells) and (any('세별도' in c for c in cells) or any('R1' in c for c in cells)):
-                header_row = i
-                break
-        if header_row is None:
-            skipped.append(f'{sheet_name}: 가격 헤더를 찾지 못함')
-            continue
-        headers = [str(x).replace(' ', '').replace('\n', '') if pd.notna(x) else '' for x in df.iloc[header_row].tolist()]
-        model_col = next((i for i,h in enumerate(headers) if '모델명' in h), None)
-        category_col = next((i for i,h in enumerate(headers) if '구분' in h), None)
-        remark_col = next((i for i,h in enumerate(headers) if h=='비고'), None)
-        if sheet_name.strip() == 'RC620, R331S':
-            ex_col = next((i for i,h in enumerate(headers) if h.startswith(boiler_tier) and '세별도' in h), None)
-            in_col = next((i for i,h in enumerate(headers) if h.startswith(boiler_tier) and '세포함' in h), None)
+            d=Decimal(str(value).replace(',','').replace('원','').strip())
+            return int(d.quantize(Decimal('1'),rounding=ROUND_HALF_UP)) if d.is_finite() and d>=0 else None
+        except (InvalidOperation,ValueError): return None
+    for sheet_name,df in sheets.items():
+        if sheet_name.strip()=='목차':continue
+        header_row=None
+        for i in range(min(len(df),40)):
+            line=[''.join(str(v).split()) if pd.notna(v) else '' for v in df.iloc[i]]
+            if any('모델명' in h for h in line) and any('세별도' in h or '세포함' in h for h in line):header_row=i;break
+        if header_row is None:skipped.append(f'{sheet_name}: 가격 헤더 없음');continue
+        headers=[''.join(str(v).split()) if pd.notna(v) else '' for v in df.iloc[header_row]]
+        model_col=next((i for i,h in enumerate(headers) if '모델명' in h),None)
+        cat_col=next((i for i,h in enumerate(headers) if '구분' in h),None)
+        note_col=next((i for i,h in enumerate(headers) if h=='비고'),None)
+        is_tier=sheet_name.strip() in ('RC620, R331S','RCK623, 각방제어')
+        tiers={}
+        if is_tier:
+            for n in range(1,8):
+                label=f'R{n}'
+                ex=next((i for i,h in enumerate(headers) if re.match(rf'^{label}세별도',h)),None)
+                inc=next((i for i,h in enumerate(headers) if re.match(rf'^{label}세포함',h)),None)
+                if ex is not None or inc is not None:tiers[label]=(ex,inc)
+            ex_col,inc_col=tiers.get('R1',(None,None))
         else:
-            ex_col = next((i for i,h in enumerate(headers) if '출하가' in h and '세별도' in h), None)
-            in_col = next((i for i,h in enumerate(headers) if '출하가' in h and '세포함' in h), None)
-        if model_col is None or ex_col is None or in_col is None:
-            skipped.append(f'{sheet_name}: 가격 열 확인 필요')
-            continue
-        last_category = ''
-        for row_idx in range(header_row+1, len(df)):
-            row = df.iloc[row_idx].tolist()
-            def cell(idx):
-                return row[idx] if idx is not None and idx < len(row) else None
-            category = cell(category_col)
-            if category is not None and pd.notna(category) and str(category).strip():
-                last_category = str(category).strip()
-            model_val = cell(model_col)
-            if model_val is None or pd.isna(model_val):
-                continue
-            model = str(model_val).strip()
-            if not model or model.lower() == 'nan' or '모델명' in model or model.startswith('['):
-                continue
-            ex, inc = integer_price(cell(ex_col)), integer_price(cell(in_col))
-            if ex is None or inc is None:
-                continue
-            note = cell(remark_col)
-            note = str(note).strip() if note is not None and pd.notna(note) else ''
+            ex_col=next((i for i,h in enumerate(headers) if '출하가' in h and '세별도' in h),None)
+            inc_col=next((i for i,h in enumerate(headers) if '출하가' in h and '세포함' in h),None)
+        if model_col is None or (ex_col is None and inc_col is None):skipped.append(f'{sheet_name}: 가격 열 없음');continue
+        last_cat=''
+        for idx in range(header_row+1,len(df)):
+            row=df.iloc[idx].tolist()
+            def cell(i):return row[i] if i is not None and i<len(row) else None
+            c=cell(cat_col)
+            if c is not None and pd.notna(c) and str(c).strip():last_cat=str(c).strip()
+            m=cell(model_col)
+            if m is None or pd.isna(m):continue
+            model=str(m).strip()
+            if not model or '모델명' in model or model.startswith('['):continue
+            ex,inc=amount(cell(ex_col)),amount(cell(inc_col))
+            if ex is None and inc is None:continue
+            if ex is None:ex=int((Decimal(inc)/Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+            if inc is None:inc=int((Decimal(ex)*Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+            note=cell(note_col);note=str(note).strip() if note is not None and pd.notna(note) else ''
+            record={'model_name':model,'product_name':model,'category':f'{sheet_name.strip()} / {last_cat}'[:250],
+                    'remarks':note[:4000],'price':ex,'price_including_vat':inc}
+            if is_tier:
+                record['tiers']={}
+                for label,(ec,ic) in tiers.items():
+                    e,v=amount(cell(ec)),amount(cell(ic))
+                    if e is None and v is None:continue
+                    derived=e is None
+                    if e is None:e=int((Decimal(v)/Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                    if v is None:v=int((Decimal(e)*Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                    record['tiers'][label]={'price_excluding_vat':e,'price_including_vat':v,'vat_excluding_derived':derived}
             if model in records:
-                previous = records[model]
-                if previous['price'] != ex or previous['price_including_vat'] != inc:
-                    skipped.append(f'{model}: 여러 시트에 다른 가격이 있어 제외')
-                    records.pop(model, None)
+                old=records[model]
+                if old['price']!=ex or old['price_including_vat']!=inc:
+                    skipped.append(f'{model}: 중복 모델 가격 불일치, 최초 값 유지')
                 continue
-            records[model] = dict(model_name=model, product_name=model,
-                                  category=f'{sheet_name} / {last_category}'[:250],
-                                  remarks=note[:4000], price=ex, price_including_vat=inc)
-    return list(records.values()), skipped
+            records[model]=record
+    return list(records.values()),skipped
 
 
 def staff_prices_page(client, role):
@@ -453,9 +450,10 @@ def staff_prices_page(client, role):
         return
     current = {int(r['product_id']):r for r in current_rows}
     by_id = {int(p['product_id']):p for p in products}
-    with st.expander('📤 린나이 원본 엑셀 전체 업로드',expanded=not bool(products)):
+    with st.expander('📤 엑셀 업로드 · 신제품 추가 / 가격 변경',expanded=not bool(products)):
         st.info('제품 등록 없이 원본 엑셀을 업로드할 수 있습니다. 업로드는 변경 요청으로 저장되고 관리자 승인 후 제품과 가격이 함께 등록됩니다.')
-        tier = st.selectbox('가스보일러(RC620, R331S) 가격 기준', ['R1','R2','R3','R4'], help='원본 엑셀은 R1~R4 가격이 서로 다릅니다. 적용할 등급을 선택하세요.')
+        tier = 'R1'
+        st.caption('RC620 / RCK623 시트는 R1~R7 전 등급을 자동으로 읽습니다. 다른 시트는 기존 방식으로 처리합니다.')
         uploaded = st.file_uploader('엑셀 가격표(.xlsx)',type=['xlsx'],key='rinnai_full_upload')
         reason = st.text_input('변경 사유',value='원본 엑셀 가격표 업로드',key='original_reason')
         if uploaded:
@@ -467,13 +465,50 @@ def staff_prices_page(client, role):
                         st.write(skipped[:150])
                 st.dataframe([{'제품군':r['category'],'모델명':r['model_name'],'세별도':money(r['price']),'세포함':money(r['price_including_vat']),'비고':r['remarks'][:100]} for r in records[:100]],hide_index=True,use_container_width=True)
                 st.caption('미리보기는 최대 100개 표시합니다. 승인 시 파일에 포함된 모델만 등록·갱신하며 누락 모델은 삭제하지 않습니다.')
-                if st.button('전체 모델 승인 요청',disabled=not records):
-                    if len(records)>3000:
+                mode = st.radio('업로드 방식', ['신제품만 추가', '포함된 모델 추가·수정'],horizontal=True,key='excel_import_mode')
+                existing_names={p['model_name'] for p in products}
+                selected_records=[r for r in records if mode!='신제품만 추가' or r['model_name'] not in existing_names]
+                st.caption(f'이번 승인 요청 대상: {len(selected_records):,}개 모델 · 엑셀에 없는 모델은 유지')
+                if st.button('엑셀 변경 승인 요청',disabled=not selected_records):
+                    if len(selected_records)>3000:
                         st.error('한 번에 최대 3,000개 모델만 처리할 수 있습니다.')
                     else:
-                        submit_price_request(client,list_id,'update',records,reason)
+                        submit_price_request(client,list_id,'update',selected_records,reason)
             except Exception as e:
                 st.error(f'엑셀 분석 실패: {e}')
+    with st.expander('➕ 신제품 직접 등록 (엑셀 없이)'):
+        with st.form('new_model_manual'):
+            new_model=st.text_input('신제품 모델명')
+            new_group=st.text_input('제품군 (예: RC620, R331S)')
+            new_detail=st.text_input('상세 제품군')
+            new_ex=st.number_input('VAT 별도 가격',min_value=0,step=1000,key='new_ex')
+            new_inc=st.number_input('VAT 포함 가격 (0이면 자동 계산)',min_value=0,step=1000,key='new_inc')
+            new_note=st.text_area('비고',max_chars=4000)
+            new_tiers={}
+            st.caption('R1~R7 등급 가격 (필요한 등급만 입력, VAT 포함 0이면 별도×1.1)')
+            for t in range(1,8):
+                c1,c2=st.columns(2)
+                with c1:te=st.number_input(f'R{t} 별도',min_value=0,step=1000,key=f'new_tier_ex_{t}')
+                with c2:ti=st.number_input(f'R{t} 포함',min_value=0,step=1000,key=f'new_tier_in_{t}')
+                if te or ti:
+                    from decimal import Decimal,ROUND_HALF_UP
+                    if not te:te=int((Decimal(ti)/Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                    if not ti:ti=int((Decimal(te)*Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                    new_tiers[f'R{t}']={'price_excluding_vat':te,'price_including_vat':ti,'vat_excluding_derived':False}
+            new_reason=st.text_input('등록 사유')
+            new_submit=st.form_submit_button('신제품 등록 승인 요청')
+        if new_submit:
+            if not new_model.strip() or not new_group.strip():st.error('모델명과 제품군을 입력하세요.')
+            elif new_model.strip() in {p['model_name'] for p in products}:st.error('이미 존재하는 모델입니다. 기존 모델 수정을 이용하세요.')
+            elif not new_ex and not new_tiers:st.error('가격을 입력하세요.')
+            else:
+                item={'model_name':new_model.strip(),'product_name':new_model.strip(),
+                      'category':f'{new_group.strip()} / {new_detail.strip() or "기타"}',
+                      'remarks':new_note,'price':int(new_ex or new_tiers.get('R1',{}).get('price_excluding_vat',0)),
+                      'price_including_vat':int(new_inc or round((new_ex or new_tiers.get('R1',{}).get('price_excluding_vat',0))*1.1)),
+                      'tiers':new_tiers}
+                try:submit_price_request(client,list_id,'update',[item],new_reason)
+                except Exception as e:st.error(str(e))
     if products:
         with st.expander('✏️ 기존 모델 가격 수정 요청'):
             p = st.selectbox('모델',products,format_func=lambda x:x['model_name'])
@@ -482,9 +517,21 @@ def staff_prices_page(client, role):
             ex=st.number_input('부가세 별도 가격',min_value=0,value=int(old.get('price') or 0),step=1000)
             inc=st.number_input('부가세 포함 가격',min_value=0,value=int(old.get('price_including_vat') or round(ex*1.1)),step=1000)
             note_text = st.text_area('비고 수정', value=p.get('remarks') or '', height=150, max_chars=4000, key=f'edit_remark_{pid}', help='변경 요청 승인 후 제품 비고에 반영됩니다. 비고는 모든 단가표에서 공통으로 표시됩니다.')
+            tier_changes={}
+            if str(p.get('category') or '').split(' / ')[0].strip() in ('RC620, R331S','RCK623, 각방제어'):
+                with st.expander('R1~R7 가격 수정 (변경할 등급만 입력)'):
+                    for t in range(1,8):
+                        cols=st.columns(2)
+                        with cols[0]:tx=st.number_input(f'R{t} VAT 별도',min_value=0,step=1000,key=f'edit_tx_{pid}_{t}')
+                        with cols[1]:ti=st.number_input(f'R{t} VAT 포함',min_value=0,step=1000,key=f'edit_ti_{pid}_{t}')
+                        if tx or ti:
+                            from decimal import Decimal,ROUND_HALF_UP
+                            if not tx:tx=int((Decimal(ti)/Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                            if not ti:ti=int((Decimal(tx)*Decimal('1.1')).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
+                            tier_changes[f'R{t}']={'price_excluding_vat':tx,'price_including_vat':ti,'vat_excluding_derived':False}
             reason_single=st.text_input('수정 사유',key='single_reason')
             if st.button('가격·비고 변경 승인 요청'):
-                try: submit_price_request(client,list_id,'update',[{'product_id':pid,'price':int(ex),'price_including_vat':int(inc),'remarks':note_text}],reason_single)
+                try: submit_price_request(client,list_id,'update',[{'product_id':pid,'price':int(ex),'price_including_vat':int(inc),'remarks':note_text,'tiers':tier_changes}],reason_single)
                 except Exception as e: st.error(str(e))
     st.subheader('승인 요청 내역')
     try:
@@ -506,7 +553,7 @@ def approvals_page(client):
                 with st.expander(f"요청 #{r['request_id']} · 단가표 {r['price_list_id']} · {r['action_type']}"):
                     items=r.get('change_data',{}).get('items',[])
                     st.write(f"요청자: {r['requested_by']} / 사유: {r.get('reason') or '-'} / 총 {len(items)}개 모델")
-                    st.dataframe([{'모델명':x.get('model_name') or by_id.get(x.get('product_id'),{}).get('model_name',''),'세별도':money(x.get('price')),'세포함':money(x.get('price_including_vat') if x.get('price_including_vat') is not None else round(float(x.get('price',0))*1.1)), '비고 변경':(x.get('remarks') if 'remarks' in x else '(변경 없음)')} for x in items[:100]],hide_index=True,use_container_width=True)
+                    st.dataframe([{'모델명':x.get('model_name') or by_id.get(x.get('product_id'),{}).get('model_name',''),'세별도':money(x.get('price')),'세포함':money(x.get('price_including_vat') if x.get('price_including_vat') is not None else round(float(x.get('price',0))*1.1)), '비고 변경':(x.get('remarks') if 'remarks' in x else '(변경 없음)'),'등급':', '.join((x.get('tiers') or {}).keys())} for x in items[:100]],hide_index=True,use_container_width=True)
                     if len(items)>100: st.caption('첫 100개만 미리보기로 표시합니다.')
                     comment=st.text_input('검토 의견',key=f"comment_{r['request_id']}")
                     confirm=st.checkbox('변경 내용을 검토했습니다',key=f"confirm_{r['request_id']}")
@@ -555,6 +602,15 @@ def price_catalog_page(client, role):
                 if product:
                     rows.append({**product, **item})
 
+        tier_prices={}
+        try:
+            if role=='dealer':
+                tier_data=client.rpc('get_my_dealer_tier_prices').execute().data or []
+            else:
+                tier_data=client.table('price_list_tier_items').select('product_id,tier,price_excluding_vat,price_including_vat').eq('price_list_id',selected['price_list_id']).execute().data or []
+            tier_prices={(int(t['product_id']),t['tier']):t for t in tier_data}
+        except Exception as tier_error:
+            st.warning(f'R1~R7 조회 기능을 확인하세요 (SQL 적용 필요): {tier_error}')
         if not rows:
             st.info('등록된 제품 가격이 없습니다.')
             return
@@ -597,6 +653,14 @@ def price_catalog_page(client, role):
                          or keyword in str(r.get('category') or '').casefold())]
         filtered.sort(key=lambda r: (str(r.get('category') or ''),
                                      str(r.get('model_name') or '')))
+        has_tiers=any((int(r['product_id']),t) in tier_prices for r in filtered for t in ('R1','R2','R3','R4','R5','R6','R7'))
+        selected_tier='R1'
+        if has_tiers:
+            selected_tier=st.radio('가격 등급 (전체 대리점 조회 가능)', ['R1','R2','R3','R4','R5','R6','R7'],horizontal=True,key='catalog_tier')
+            filtered=[{**r,**({'price':tier_prices[(int(r['product_id']),selected_tier)]['price_excluding_vat'],
+                    'price_including_vat':tier_prices[(int(r['product_id']),selected_tier)]['price_including_vat']}
+                    if (int(r['product_id']),selected_tier) in tier_prices else
+                    {'price':None,'price_including_vat':None} if any((int(r['product_id']),t) in tier_prices for t in ('R1','R2','R3','R4','R5','R6','R7')) else {})} for r in filtered]
         st.caption(f'조회 결과 {len(filtered):,}개 모델 · 단위: 원')
         if not filtered:
             st.info('검색 결과가 없습니다. 제품군 또는 검색어를 변경해 주세요.')
