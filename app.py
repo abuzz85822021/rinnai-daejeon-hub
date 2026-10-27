@@ -97,11 +97,11 @@ def dealer_accounts_page(client):
         st.warning("등록된 대리점이 없습니다. 먼저 대리점 정보를 등록해 주세요.")
         return
     if "new_dealer_pw" not in st.session_state:
-        st.session_state.new_dealer_pw = secrets.token_urlsafe(12)
+        st.session_state.new_dealer_pw = ""
     with st.form("dealer_create_account"):
         dealer = st.selectbox("대리점", dealers, format_func=lambda x: x["dealer_name"])
         username = st.text_input("로그인 아이디", placeholder="예: dealer001", max_chars=32)
-        password = st.text_input("초기 비밀번호 (12자 이상)", value=st.session_state.new_dealer_pw, type="password")
+        password = st.text_input("초기 비밀번호 (숫자 4자리)", value=st.session_state.new_dealer_pw, type="password")
         submit = st.form_submit_button("대리점 계정 생성", use_container_width=True)
     if submit:
         try:
@@ -109,8 +109,8 @@ def dealer_accounts_page(client):
             if "@" in username:
                 st.error("대리점 아이디에는 @를 사용할 수 없습니다.")
                 return
-            if len(password) < 12:
-                st.error("비밀번호는 12자 이상이어야 합니다.")
+            if not re.fullmatch(r"[0-9]{4}", password):
+                st.error("비밀번호는 숫자 4자리로 입력해 주세요.")
                 return
             response = client.functions.invoke("dealer-account-admin", {"body": {
                 "action": "create", "username": username.strip().lower(),
@@ -123,7 +123,7 @@ def dealer_accounts_page(client):
             if isinstance(data, dict) and data.get("ok"):
                 st.success("대리점 계정을 생성했습니다. 아래 아이디와 초기 비밀번호를 안전하게 전달하세요.")
                 st.code(f"아이디: {username.strip().lower()}\n초기 비밀번호: {password}")
-                st.session_state.new_dealer_pw = secrets.token_urlsafe(12)
+                st.session_state.new_dealer_pw = ""
             else:
                 st.error("계정 생성 실패: " + str(data.get("error", "응답 확인 필요") if isinstance(data, dict) else data))
         except Exception as e:
