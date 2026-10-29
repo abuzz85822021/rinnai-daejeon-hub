@@ -526,7 +526,7 @@ def staff_prices_page(client, role):
     except Exception as e:
         st.error(f'가격 조회 실패: {e}. VAT 설정 SQL 실행 여부를 확인하세요.')
         return
-    current = {int(r['product_id']):r for r in current_rows}
+    current = {int(r['product_id'] or -1):r for r in current_rows}
     by_id = {int(p['product_id']):p for p in products}
     with st.expander('📤 엑셀 업로드 · 신제품 추가 / 가격 변경',expanded=not bool(products)):
         st.info('제품 등록 없이 원본 엑셀을 업로드할 수 있습니다. 업로드는 변경 요청으로 저장되고 관리자 승인 후 제품과 가격이 함께 등록됩니다.')
@@ -681,6 +681,19 @@ def price_catalog_page(client, role):
     try:
         if role == 'dealer':
             rows = client.rpc('get_my_dealer_prices').execute().data or []
+            # The dealer RPC returns model details/prices but not product_id.
+            # Recover IDs from the products catalog for R1~R7 tier lookup.
+            if rows:
+                catalog_products = get_products(client)
+                product_ids_by_model = {}
+                for product in catalog_products:
+                    model_key = str(product.get('model_name') or '').strip()
+                    if model_key and model_key not in product_ids_by_model:
+                        product_ids_by_model[model_key] = product.get('product_id')
+                for row in rows:
+                    if row.get('product_id') is None:
+                        row['product_id'] = product_ids_by_model.get(
+                            str(row.get('model_name') or '').strip())
             list_name = '내 대리점 단가표'
         else:
             lists = get_price_lists(client)
@@ -707,7 +720,7 @@ def price_catalog_page(client, role):
                 tier_data=client.rpc('get_my_dealer_tier_prices').execute().data or []
             else:
                 tier_data=client.table('price_list_tier_items').select('product_id,tier,price_excluding_vat,price_including_vat').eq('price_list_id',selected['price_list_id']).execute().data or []
-            tier_prices={(int(t['product_id']),t['tier']):t for t in tier_data}
+            tier_prices={(int(t['product_id']),t['tier']):t for t in tier_data if t.get('product_id') is not None}
         except Exception as tier_error:
             st.warning(f'R1~R7 조회 기능을 확인하세요 (SQL 적용 필요): {tier_error}')
         if not rows:
@@ -758,14 +771,14 @@ def price_catalog_page(client, role):
                          or keyword in str(r.get('category') or '').casefold())]
         filtered.sort(key=lambda r: (str(r.get('category') or ''),
                                      str(r.get('model_name') or '')))
-        has_tiers=any((int(r['product_id']),t) in tier_prices for r in filtered for t in ('R1','R2','R3','R4','R5','R6','R7'))
+        has_tiers=any((int(r['product_id'] or -1),t) in tier_prices for r in filtered for t in ('R1','R2','R3','R4','R5','R6','R7'))
         selected_tier='R1'
         if has_tiers:
             selected_tier=st.radio('가격 등급 (전체 대리점 조회 가능)', ['R1','R2','R3','R4','R5','R6','R7'],horizontal=True,key='catalog_tier')
-            filtered=[{**r,**({'price':tier_prices[(int(r['product_id']),selected_tier)]['price_excluding_vat'],
-                    'price_including_vat':tier_prices[(int(r['product_id']),selected_tier)]['price_including_vat']}
-                    if (int(r['product_id']),selected_tier) in tier_prices else
-                    {'price':None,'price_including_vat':None} if any((int(r['product_id']),t) in tier_prices for t in ('R1','R2','R3','R4','R5','R6','R7')) else {})} for r in filtered]
+            filtered=[{**r,**({'price':tier_prices[(int(r['product_id'] or -1),selected_tier)]['price_excluding_vat'],
+                    'price_including_vat':tier_prices[(int(r['product_id'] or -1),selected_tier)]['price_including_vat']}
+                    if (int(r['product_id'] or -1),selected_tier) in tier_prices else
+                    {'price':None,'price_including_vat':None} if any((int(r['product_id'] or -1),t) in tier_prices for t in ('R1','R2','R3','R4','R5','R6','R7')) else {})} for r in filtered]
         st.caption(f'조회 결과 {len(filtered):,}개 모델 · 단위: 원')
         if not filtered:
             st.info('검색 결과가 없습니다. 제품군 또는 검색어를 변경해 주세요.')
